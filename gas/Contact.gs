@@ -92,6 +92,7 @@ var INVITATION_FIELDS_ = [
 
 function invitationPrompt_(draft) {
   var field = INVITATION_FIELDS_[draft.step], message = textMessage_('留下邀約 ' + (draft.step + 1) + ' / 4\n' + field.prompt +
+    (draft.step === 0 && draft.jobPrefilled ? '\n\n「職缺或合作內容」已帶入剛才的職缺對照摘要，確認前可檢查或重新填寫。' : '') +
     (draft.step === 0 ? '\n\n確認後才會存入履歷主人的私有邀約收件匣，並以 Email 與已設定的 LINE 通知本人；填寫內容不交給 AI。30 分鐘內可繼續，輸入「取消」可離開。' : ''));
   message.quickReply = { items: [{ type: 'action', action: { type: 'postback', label: '取消邀約', data: 'invite:cancel', displayText: '取消邀約' } }] };
   if (draft.step === 3) message.quickReply.items.unshift({ type: 'action', action: { type: 'postback', label: '略過時段', data: 'invite:skip:' + draft.id, displayText: '略過時段' } });
@@ -206,6 +207,14 @@ function handleContact_(event, text, cfg, prepared, options) {
     if (text === 'invite:cancel' || /^(?:取消|取消邀約)$/.test(text)) {
       cache.remove(key); props.deleteProperty(pendingKey); draft = null; return remember([textMessage_('已取消填寫，未送出新的邀約。')]);
     }
+    if (text === 'invite:job') {
+      // 由職缺對照帶入「職缺或合作內容」；摘要過期時不猜測內容，請訪客重新對照或手動填寫。
+      var summary = jobMatchSummary_(event.source.userId);
+      if (!summary) return remember([textMessage_('職缺對照結果已過期（約 30 分鐘）。請重新輸入「職缺對照」，或選「留下邀約」手動填寫。')]);
+      draft = { id: sha256_(Utilities.getUuid()).slice(0, 32), step: 0, fields: { message: summary }, jobPrefilled: true, expiresAt: Date.now() + 1800000 };
+      props.setProperty(pendingKey, draft.id);
+      return remember(invitationPrompt_(draft));
+    }
     if (text === 'invite:start' || text === '留下邀約' || draft && text === 'invite:restart:' + draft.id) {
       draft = { id: sha256_(Utilities.getUuid()).slice(0, 32), step: 0, fields: {}, expiresAt: Date.now() + 1800000 };
       props.setProperty(pendingKey, draft.id);
@@ -236,6 +245,8 @@ function handleContact_(event, text, cfg, prepared, options) {
       else if (event.type !== 'message' || !text || /^invite:/.test(text)) return invitationPrompt_(draft);
       else if (text.length > field.limit) return [textMessage_('這一欄請控制在 ' + field.limit + ' 字內，再傳送一次。')];
       draft.fields[field.key] = value; draft.step++;
+      // 職缺內容已由對照結果帶入，略過這一欄；確認頁仍完整顯示，可選「重新填寫」改為手動。
+      if (draft.jobPrefilled && INVITATION_FIELDS_[draft.step] && INVITATION_FIELDS_[draft.step].key === 'message') draft.step++;
       return remember(draft.step === 4 ? invitationConfirmation_(draft) : invitationPrompt_(draft));
     }
     if (draft && draft.step === 4) return invitationConfirmation_(draft);

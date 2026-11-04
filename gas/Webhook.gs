@@ -133,9 +133,9 @@ function handleEvent_(event, cfg) {
     if (!cfg.enabled) messages = [textMessage_('履歷助理目前暫停服務，請稍後再試。')];
     else if ((jobMatch = handleJobMatch_(event, text, cfg))) {
       // v3 職缺對照：職缺可長於一般問題，先於 800 字限制處理；職缺文字不保存、不記為待補充問題。
-      if (jobMatch.analyze) {
+      if (jobMatch.analyze || jobMatch.interview) {
         startLoading_(event.source.userId, cfg);
-        try { messages = analyzeJobPosting_(jobMatch.analyze, cfg, prepared); }
+        try { messages = jobMatch.interview ? interviewKit_(cfg, prepared) : analyzeJobPosting_(jobMatch.analyze, cfg, prepared, event.source.userId); }
         catch (error) { safeLog_(errorCode_(error)); messages = [textMessage_(ragErrorMessage_(error))]; }
       } else messages = jobMatch.messages;
     }

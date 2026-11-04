@@ -67,7 +67,13 @@ test('job match: prompt first, then requirements are checked one by one with ver
   assert(JSON.parse(calls[0].body.contents[0].parts[0].text).posting === posting);
   // 職缺不保存、不寫入 Doc 待補充區、不出現在記錄。
   assert.equal(state.documentWrites, 0);
-  assert(![...state.cache.values(), ...state.properties.values()].some(value => String(value).includes('SQL')));
+  assert(![...state.properties.values()].some(value => String(value).includes('SQL')));
+  // 只暫存職稱與條件清單摘要，供「用這份職缺留邀約」；職缺全文（例如工作內容）不保存。
+  assert(![...state.cache.values()].some(value => String(value).includes('整理營運資料並製作報表')));
+  const summaries = [...state.cache.entries()].filter(([key]) => key.startsWith('jobsummary:'));
+  assert.equal(summaries.length, 1);
+  assert(!summaries[0][0].includes('user-1'));
+  assert.equal(messages[1].quickReply.items[0].action.data, 'invite:job');
   assert(!state.logs.some(line => String(line).includes('SQL')));
   assert(![...state.cache.keys()].some(key => key.startsWith('jobmatch:')), 'waiting flag cleared after use');
   assert.equal(gas.jobMatchWaiting_('user-1'), false);
@@ -184,4 +190,83 @@ test('home card and help text point visitors to job match', () => {
   assert(home[0].contents.contents[2].footer.contents.some(button => button.action.data === 'nav:jobmatch'));
   assert.match(send('使用說明', 'help')[0].text, /職缺對照/);
   assert.match(send('隱私', 'privacy')[0].text, /職缺對照/);
+});
+
+test('invite with this job: the match summary fills the job field and the invitation skips that step', () => {
+  const { send, state, gas } = jobGas();
+  send('職缺：' + posting, 'ij-1');
+  const tap = (data, id) => {
+    gas.handleEvent_({ ...event('', id), type: 'postback', postback: { data } }, gas.config_());
+    return state.calls.filter(c => c.url.endsWith('/message/reply')).at(-1).body.messages;
+  };
+  const prompt = tap('invite:job', 'ij-2');
+  assert.match(prompt[0].text, /留下邀約 1 \/ 4[\s\S]*已帶入剛才的職缺對照摘要/);
+  assert.match(send('禾序科技 王小姐', 'ij-3')[0].text, /留下邀約 3 \/ 4/, 'job description step is skipped');
+  send('hr@company.example.org', 'ij-4');
+  const confirm = send('平日下午', 'ij-5');
+  assert.match(confirm[0].text, /職缺或合作內容：職缺：資料分析師（由職缺對照帶入）\n✅ 熟悉 Python 資料處理\n❔ 具備 SQL 經驗\n❔ 英文簡報能力/);
+  assert.equal(state.documentWrites, 0);
+});
+
+test('invite with this job: an expired or missing summary asks to redo the match instead of guessing', () => {
+  const { gas, state } = jobGas();
+  gas.handleEvent_({ ...event('', 'ij-x'), type: 'postback', postback: { data: 'invite:job' } }, gas.config_());
+  const reply = state.calls.filter(c => c.url.endsWith('/message/reply')).at(-1).body.messages;
+  assert.match(reply[0].text, /職缺對照結果已過期/);
+  assert.equal(state.calls.filter(c => c.url.includes('generativelanguage')).length, 0);
+});
+
+test('clearing the conversation also clears the saved job-match summary', () => {
+  const { send, state } = jobGas();
+  send('職缺：' + posting, 'cl-1');
+  assert([...state.cache.keys()].some(key => key.startsWith('jobsummary:')));
+  send('清除對話', 'cl-2');
+  assert(![...state.cache.keys()].some(key => key.startsWith('jobsummary:')));
+});
+
+const kit = questions => ({ questions });
+test('interview kit: questions keep verified sources; invented quotes and non-job questions are dropped', () => {
+  const { send, ai, state } = jobGas();
+  state.response = (orig => call => {
+    const props = call.body?.generationConfig?.responseSchema?.properties || {};
+    if (props.questions && props.questions.items?.properties?.listenFor) return reply(kit([
+      { question: '你如何用 pandas 整理不同格式的資料？', focus: 'Python', listenFor: '能說明本人實際處理的步驟', evidence: { id: 'S1', quote: '使用 pandas 整理 CSV 與 Excel 資料' } },
+      { question: '報表縮短 20% 處理時間是怎麼量測的？', focus: '報表', listenFor: '數據來源與比較基準', evidence: { id: 'S2', quote: '將處理時間縮短 20%' } },
+      { question: '你帶領過二十人的團隊嗎？', focus: '管理', listenFor: '', evidence: { id: 'S2', quote: '帶領二十人團隊完成轉型' } },
+      { question: '請問你的年齡與婚姻狀況？', focus: '', listenFor: '', evidence: { id: 'S1', quote: '使用 pandas 整理 CSV' } }
+    ]));
+    return orig(call);
+  })(state.response);
+  const messages = send('面談題庫', 'kit-1');
+  const text = messages[0].text;
+  assert.match(text, /^🗂 面談題庫/);
+  assert.match(text, /1\. 你如何用 pandas 整理不同格式的資料？\n   出處：專業技能\n   留意：能說明本人實際處理的步驟/);
+  assert.match(text, /2\. 報表縮短 20% 處理時間是怎麼量測的？\n   出處：專案作品/);
+  assert.doesNotMatch(text, /二十人|年齡與婚姻/);
+  assert(state.logs.some(line => line.includes('INTERVIEW_KIT_EVIDENCE_DROPPED')));
+  assert.deepEqual(ai().map(c => c.url.split(':').at(-1)), ['embedContent', 'generateContent']);
+  assert(messages[0].quickReply.items.some(item => item.action.data === 'nav:jobmatch'));
+  assert.equal(state.documentWrites, 0);
+});
+
+test('interview kit: fewer than two verified questions shows the safe error instead of weak output', () => {
+  const { send, state } = jobGas();
+  state.response = (orig => call => {
+    const props = call.body?.generationConfig?.responseSchema?.properties || {};
+    if (props.questions && props.questions.items?.properties?.listenFor) return reply(kit([
+      { question: '你在 Google 擔任主管多久？', focus: '', listenFor: '', evidence: { id: 'S1', quote: '在 Google 擔任主管五年' } }
+    ]));
+    return orig(call);
+  })(state.response);
+  assert.match(send('面試問題', 'kit-2')[0].text, /未通過來源檢查/);
+});
+
+test('interview kit: unsynced resume changes block it before any AI call, and the home card links to it', () => {
+  const { send, state, ai } = jobGas();
+  const home = send('首頁', 'kit-home');
+  assert(home[0].contents.contents[2].footer.contents.some(button => button.action.data === 'nav:interview'));
+  assert.match(send('使用說明', 'kit-help')[0].text, /面談題庫/);
+  state.text = resume.replace('20%', '30%');
+  assert.match(send('面談題庫', 'kit-3')[0].text, /等待同步/);
+  assert.equal(ai().length, 0);
 });

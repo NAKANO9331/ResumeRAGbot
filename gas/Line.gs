@@ -162,8 +162,7 @@ function welcomeMessage_(cfg, prepared) {
     card('01', 'HELLO / 認識我', identity, [contactButton_('聯繫本人', 'nav:contact')]),
     card('02', 'ABOUT / 個人特質', traits, [compactButton(buttons[1])]),
     card('03', 'EXPLORE / 履歷導覽', navigation, [{ type: 'button', height: 'sm', style: 'link', color: '#23735B', action: { type: 'postback', label: '回首頁', data: 'nav:home', displayText: '首頁' } },
-      { type: 'button', height: 'sm', style: 'link', color: '#23735B', action: { type: 'postback', label: '職缺對照', data: 'nav:jobmatch', displayText: '職缺對照' } },
-      { type: 'button', height: 'sm', style: 'link', color: '#23735B', action: { type: 'postback', label: '面談題庫', data: 'nav:interview', displayText: '面談題庫' } }])
+      { type: 'button', height: 'sm', style: 'link', color: '#23735B', action: { type: 'postback', label: '職缺對照', data: 'nav:jobmatch', displayText: '職缺對照' } }])
   ] } };
 }
 
@@ -171,7 +170,7 @@ function welcomeMessage_(cfg, prepared) {
  * 訪客輸入「使用說明」時顯示的操作方法。
  */
 function helpText_() {
-  return '輸入「聯繫本人」「想約面試」或「想合作」，可查看 Email 或留下邀約。\n\n人資可輸入「職缺對照」再貼上職缺需求，逐項整理有履歷依據的條件、待確認項目與建議面談問題，並可「用這份職缺留邀約」；輸入「面談題庫」可取得依履歷整理、附出處的面談問題。\n\n你可以直接提問，例如：\n• 請用 30 秒介紹這位求職者。\n• 有哪些工作經歷與具體成果？\n• 做過哪些與資料分析相關的專案？\n• 這份履歷有哪些符合產品經理職缺的條件？\n• 如何聯絡本人？\n\n約 10 分鐘內可接續追問同一件作品，例如「這張用了什麼配色？」；輸入「清除對話」可重新開始。短期記憶可能提早失效，屆時請補上作品名稱。回答依據公開履歷；找不到足夠資料的問題會記錄給履歷主人確認與補充。\n\n隨時輸入「首頁」「選單」或「回首頁」，就能重新開啟三張履歷卡；輸入「隱私」查看資料使用方式。';
+  return '輸入「聯繫本人」「想約面試」或「想合作」，可查看 Email 或留下邀約。\n\n人資可輸入「職缺對照」再貼上職缺需求，逐項整理有履歷依據的條件、待確認項目與建議面談問題；之後可「用這份職缺留邀約」或預約面談，並附上想先請教本人的問題。輸入「預約面談」可直接選擇本人開放的面談時段。\n\n你可以直接提問，例如：\n• 請用 30 秒介紹這位求職者。\n• 有哪些工作經歷與具體成果？\n• 做過哪些與資料分析相關的專案？\n• 這份履歷有哪些符合產品經理職缺的條件？\n• 如何聯絡本人？\n\n約 10 分鐘內可接續追問同一件作品，例如「這張用了什麼配色？」；輸入「清除對話」可重新開始。短期記憶可能提早失效，屆時請補上作品名稱。回答依據公開履歷；找不到足夠資料的問題會記錄給履歷主人確認與補充。\n\n隨時輸入「首頁」「選單」或「回首頁」，就能重新開啟三張履歷卡；輸入「隱私」查看資料使用方式。';
 }
 
 /**

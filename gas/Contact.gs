@@ -66,7 +66,9 @@ function contactMessage_(cfg, prepared) {
   contents.push({ type: 'text', text: 'LINE 邀約：在這裡填寫，確認送出後由機器人通知本人。', size: 'xs', wrap: true, color: '#687770', margin: 'md' });
   var invitationButton = contactButton_('在 LINE 留邀約', 'invite:start');
   invitationButton.style = 'primary'; invitationButton.color = '#23735B';
-  buttons.push(invitationButton, contactButton_('回首頁', 'nav:home'));
+  buttons.push(invitationButton);
+  if (hasFutureSlots_()) buttons.push(contactButton_('預約面談時段', 'book:start'));
+  buttons.push(contactButton_('回首頁', 'nav:home'));
   return { type: 'flex', altText: '聯繫本人｜Email 與留下邀約', quickReply: quickReply_(), contents: { type: 'bubble', size: 'kilo',
     body: { type: 'box', layout: 'vertical', paddingAll: '20px', contents: contents },
     footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: buttons } } };
@@ -90,9 +92,25 @@ var INVITATION_FIELDS_ = [
   { key: 'availability', label: '方便聯繫的時段', prompt: '方便聯繫的時段？不限定可按「略過時段」。', limit: 120 }
 ];
 
+/** 由職缺對照帶入的邀約：步驟 2 改問「想先請教本人的問題」，職缺摘要固定帶入。 */
+function jobQuestionsPrompt_(draft) {
+  var message = textMessage_('留下邀約 2 / 4\n「職缺或合作內容」已帶入剛才的職缺對照摘要。\n\n想先請教本人哪些問題？（選填，500 字內）本人收到邀約時會一起看到，可以先準備說明。' +
+    (draft.suggested ? '\n\n建議問題（來自待確認的條件）：\n' + draft.suggested + '\n\n可按「使用建議問題」、直接輸入自己的問題，或「略過」。' : '\n\n可直接輸入問題，或按「略過」。'));
+  message.quickReply = { items: (draft.suggested ? [{ type: 'action', action: { type: 'postback', label: '使用建議問題', data: 'invite:q:use:' + draft.id, displayText: '使用建議問題' } }] : []).concat([
+    { type: 'action', action: { type: 'postback', label: '略過', data: 'invite:q:skip:' + draft.id, displayText: '略過問題' } },
+    { type: 'action', action: { type: 'postback', label: '取消邀約', data: 'invite:cancel', displayText: '取消邀約' } }]) };
+  return [message];
+}
+
+function jobInvitationMessage_(job, questions) {
+  return job + (questions ? '\n\n想先請教本人的問題：\n' + questions : '');
+}
+
 function invitationPrompt_(draft) {
+  if (draft.job && INVITATION_FIELDS_[draft.step].key === 'message') return jobQuestionsPrompt_(draft);
   var field = INVITATION_FIELDS_[draft.step], message = textMessage_('留下邀約 ' + (draft.step + 1) + ' / 4\n' + field.prompt +
-    (draft.step === 0 && draft.jobPrefilled ? '\n\n「職缺或合作內容」已帶入剛才的職缺對照摘要，確認前可檢查或重新填寫。' : '') +
+    (draft.step === 0 && draft.slot ? '\n\n已選擇面談時段：' + draft.slot.label + '（台北時間）。確認送出時才會保留這個時段。' : '') +
+    (draft.step === 0 && draft.job ? '\n\n「職缺或合作內容」會帶入剛才的職缺對照摘要，下一步可附上想先請教本人的問題。' : '') +
     (draft.step === 0 ? '\n\n確認後才會存入履歷主人的私有邀約收件匣，並以 Email 與已設定的 LINE 通知本人；填寫內容不交給 AI。30 分鐘內可繼續，輸入「取消」可離開。' : ''));
   message.quickReply = { items: [{ type: 'action', action: { type: 'postback', label: '取消邀約', data: 'invite:cancel', displayText: '取消邀約' } }] };
   if (draft.step === 3) message.quickReply.items.unshift({ type: 'action', action: { type: 'postback', label: '略過時段', data: 'invite:skip:' + draft.id, displayText: '略過時段' } });
@@ -207,11 +225,37 @@ function handleContact_(event, text, cfg, prepared, options) {
     if (text === 'invite:cancel' || /^(?:取消|取消邀約)$/.test(text)) {
       cache.remove(key); props.deleteProperty(pendingKey); draft = null; return remember([textMessage_('已取消填寫，未送出新的邀約。')]);
     }
+    var expiredJob = '職缺對照結果已過期（約 30 分鐘）。請重新輸入「職缺對照」，或選「留下邀約」手動填寫。';
+    function newDraft(job) {
+      var created = { id: sha256_(Utilities.getUuid()).slice(0, 32), step: 0, fields: {}, expiresAt: Date.now() + 1800000 };
+      if (job) { created.job = jobSummaryText_(job); created.suggested = jobSuggestedQuestions_(job); }
+      return created;
+    }
     if (text === 'invite:job') {
       // 由職缺對照帶入「職缺或合作內容」；摘要過期時不猜測內容，請訪客重新對照或手動填寫。
       var summary = jobMatchSummary_(event.source.userId);
-      if (!summary) return remember([textMessage_('職缺對照結果已過期（約 30 分鐘）。請重新輸入「職缺對照」，或選「留下邀約」手動填寫。')]);
-      draft = { id: sha256_(Utilities.getUuid()).slice(0, 32), step: 0, fields: { message: summary }, jobPrefilled: true, expiresAt: Date.now() + 1800000 };
+      if (!summary) return remember([textMessage_(expiredJob)]);
+      draft = newDraft(summary);
+      props.setProperty(pendingKey, draft.id);
+      return remember(invitationPrompt_(draft));
+    }
+    if (bookingIntent_(text)) {
+      var openSlots;
+      try { openSlots = availableSlots_(loadPortfolioStore_(cfg)); } catch (_) { openSlots = []; }
+      if (!openSlots.length) return remember([textMessage_('目前沒有開放預約的面談時段。可以選「留下邀約」，寫下方便的時間，由本人與你確認。')]);
+      if (text === 'book:job' && !jobMatchSummary_(event.source.userId)) return remember([textMessage_(expiredJob)]);
+      return remember([slotPickerMessage_(openSlots, text === 'book:job')]);
+    }
+    var pick = /^book:slot:([a-f0-9]{12})(:job)?$/.exec(text);
+    if (pick) {
+      var chosen;
+      try { chosen = availableSlots_(loadPortfolioStore_(cfg)).filter(function (slot) { return slot.key === pick[1]; })[0]; } catch (_) {}
+      if (!chosen) return remember([textMessage_('這個時段已被預約、已過期或已被本人移除。請重新選擇「預約面談」。')]);
+      var jobSummary = pick[2] ? jobMatchSummary_(event.source.userId) : null;
+      if (pick[2] && !jobSummary) return remember([textMessage_(expiredJob)]);
+      draft = newDraft(jobSummary);
+      draft.slot = { key: chosen.key, start: chosen.start, label: chosen.label };
+      draft.fields.availability = bookingAvailabilityText_(chosen);
       props.setProperty(pendingKey, draft.id);
       return remember(invitationPrompt_(draft));
     }
@@ -225,8 +269,19 @@ function handleContact_(event, text, cfg, prepared, options) {
       var store = loadPortfolioStore_(cfg), records = store.invitations || {}, existing = records[submit[1]], visitor = invitationVisitor_(event.source.userId);
       if (existing && existing.visitor === visitor) { props.deleteProperty(pendingKey); return invitationReceipt_(existing); }
       if (!draft || draft.id !== submit[1] || draft.step !== 4) return [textMessage_('這份確認已過期或已被新的草稿取代。請使用最新確認卡片，或重新選擇「留下邀約」。')];
+      // 選時段到送出之間，時段可能已被別人預約或被主人移除；在鎖內再核對一次。
+      if (draft.slot && !availableSlots_(store).some(function (slot) { return slot.key === draft.slot.key; })) {
+        draft.slot = null; draft.fields.availability = ''; draft.step = 3;
+        return remember([textMessage_('剛才選的面談時段已被預約、已過期或已被本人移除，邀約尚未送出。請輸入其他方便聯繫的時段，或按「略過時段」。')].concat(invitationPrompt_(draft)));
+      }
       try {
         records[draft.id] = { id: draft.id, visitor: visitor, createdAt: new Date().toISOString(), status: 'new', fields: draft.fields };
+        if (draft.slot) {
+          var bookings = store.bookings || {};
+          Object.keys(bookings).forEach(function (key) { if (!(bookings[key].start > Date.now()) || !records[bookings[key].invitationId]) delete bookings[key]; });
+          bookings[draft.slot.key] = { invitationId: draft.id, start: draft.slot.start };
+          store.bookings = bookings;
+        }
         store.invitations = records;
         // 本函式已持鎖，不再次呼叫會取得同一把鎖的 updatePortfolioStore_。
         savePortfolioStore_(store, cfg);
@@ -240,13 +295,16 @@ function handleContact_(event, text, cfg, prepared, options) {
     // 快取提早清除後，用不含個資的待填旗標攔住下一則訊息，避免誤送 RAG。
     if (!draft && props.getProperty(pendingKey)) { props.deleteProperty(pendingKey); return remember([textMessage_('邀約草稿已過期，剛才的內容沒有交給 AI 或送出。請重新選擇「留下邀約」，或輸入「首頁」離開。')]); }
     if (draft && draft.step < 4) {
-      var field = INVITATION_FIELDS_[draft.step], value = text;
-      if (text === 'invite:skip:' + draft.id && draft.step === 3) value = '';
+      var field = INVITATION_FIELDS_[draft.step], value = text, asking = field.key === 'message' && draft.job, limit = asking ? 500 : field.limit;
+      if (asking && text === 'invite:q:use:' + draft.id) value = draft.suggested || '';
+      else if (asking && text === 'invite:q:skip:' + draft.id) value = '';
+      else if (text === 'invite:skip:' + draft.id && draft.step === 3) value = '';
       else if (event.type !== 'message' || !text || /^invite:/.test(text)) return invitationPrompt_(draft);
-      else if (text.length > field.limit) return [textMessage_('這一欄請控制在 ' + field.limit + ' 字內，再傳送一次。')];
-      draft.fields[field.key] = value; draft.step++;
-      // 職缺內容已由對照結果帶入，略過這一欄；確認頁仍完整顯示，可選「重新填寫」改為手動。
-      if (draft.jobPrefilled && INVITATION_FIELDS_[draft.step] && INVITATION_FIELDS_[draft.step].key === 'message') draft.step++;
+      else if (text.length > limit) return [textMessage_('這一欄請控制在 ' + limit + ' 字內，再傳送一次。')];
+      // 職缺摘要固定帶入，訪客的輸入是附加的問題；確認頁完整顯示，可按「重新填寫」改為手動。
+      draft.fields[field.key] = asking ? jobInvitationMessage_(draft.job, value) : value; draft.step++;
+      // 已選面談時段時，略過「方便聯繫的時段」。
+      if (draft.slot && INVITATION_FIELDS_[draft.step] && INVITATION_FIELDS_[draft.step].key === 'availability') draft.step++;
       return remember(draft.step === 4 ? invitationConfirmation_(draft) : invitationPrompt_(draft));
     }
     if (draft && draft.step === 4) return invitationConfirmation_(draft);
@@ -276,7 +334,11 @@ function updateInvitation(token, id, action) {
     if (!/^[a-f0-9]{32}$/.test(String(id)) || ['handled', 'new', 'delete'].indexOf(action) < 0) throw new Error('REVIEW_INVALID_INPUT');
     updatePortfolioStore_(cfg, function (store) {
       if (!store.invitations || !store.invitations[id]) return;
-      if (action === 'delete') delete store.invitations[id];
+      if (action === 'delete') {
+        delete store.invitations[id];
+        // 刪除預約面談的邀約時一併釋出時段。
+        Object.keys(store.bookings || {}).forEach(function (key) { if (store.bookings[key].invitationId === id) delete store.bookings[key]; });
+      }
       else store.invitations[id].status = action;
     });
     return { status: 'ok' };

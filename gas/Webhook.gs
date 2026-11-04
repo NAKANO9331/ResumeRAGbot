@@ -129,7 +129,16 @@ function handleEvent_(event, cfg) {
           prepared = { index: currentIndex, source: currentSource }; }
       } catch (_) { MESSAGE_TOPICS_ = []; }
     }
+    var jobMatch = null;
     if (!cfg.enabled) messages = [textMessage_('履歷助理目前暫停服務，請稍後再試。')];
+    else if ((jobMatch = handleJobMatch_(event, text, cfg))) {
+      // v3 職缺對照：職缺可長於一般問題，先於 800 字限制處理；職缺文字不保存、不記為待補充問題。
+      if (jobMatch.analyze) {
+        startLoading_(event.source.userId, cfg);
+        try { messages = analyzeJobPosting_(jobMatch.analyze, cfg, prepared); }
+        catch (error) { safeLog_(errorCode_(error)); messages = [textMessage_(ragErrorMessage_(error))]; }
+      } else messages = jobMatch.messages;
+    }
     else if ((messages = handleContact_(event, text, cfg, prepared))) { /* 聯繫與邀約不經 RAG。 */ }
     else if (/^(清除對話|重新開始|reset)$/i.test(text)) {
       clearConversation_(event.source.userId);

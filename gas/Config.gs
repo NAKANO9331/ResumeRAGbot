@@ -39,7 +39,7 @@ function config_() {
 /**
  * 目前程式版本；發布時須與 package.json、學生安裝包及正式部署一致。
  */
-function appVersion_() { return '2.0.0'; }
+function appVersion_() { return '3.0.0'; }
 
 /**
  * 接受原始文件 ID 或一般 Google Docs 網址，統一取得文件 ID。
